@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 
 # Configuração da página
 st.set_page_config(page_title="Buscar Endereço", layout="centered")
@@ -20,6 +22,36 @@ def carregar_dados():
     return pd.read_excel(excel_path)
 
 df = carregar_dados()
+
+# === Função de geocodificação ===
+@st.cache_data
+def geocodificar_enderecos(df, cidade):
+    if {"LAT", "LON"}.issubset(df.columns):
+        return df  # já tem coordenadas
+    
+    geolocator = Nominatim(user_agent="streamlit_app")
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)  # evita bloqueio
+
+    latitudes = []
+    longitudes = []
+
+    for endereco in df["Endereço"].fillna(""):
+        try:
+            query = f"{endereco}, {cidade}, Brasil"
+            location = geocode(query)
+            if location:
+                latitudes.append(location.latitude)
+                longitudes.append(location.longitude)
+            else:
+                latitudes.append(None)
+                longitudes.append(None)
+        except Exception:
+            latitudes.append(None)
+            longitudes.append(None)
+
+    df["LAT"] = latitudes
+    df["LON"] = longitudes
+    return df
 
 # Filtro por CIDADE
 cidade_escolhida = st.selectbox("Selecione a cidade:", sorted(df["CIDADE"].dropna().unique()))
@@ -55,5 +87,14 @@ if not df_filtrado.empty:
         file_name="resultados_filtrados.csv",
         mime="text/csv"
     )
+
+    # === Exibir no mapa ===
+    st.markdown("### 🗺️ Mapa dos endereços filtrados")
+    df_mapa = geocodificar_enderecos(df_filtrado, cidade_escolhida)
+    df_mapa = df_mapa.dropna(subset=["LAT", "LON"])  # remove os que não foram encontrados
+    if not df_mapa.empty:
+        st.map(df_mapa[["LAT", "LON"]])
+    else:
+        st.warning("⚠️ Nenhum endereço pôde ser localizado no mapa.")
 else:
     st.warning("Nenhum resultado encontrado para os filtros aplicados.")
